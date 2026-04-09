@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
+import { auth, db } from "../lib/firebase";
 import "./globals.css";
 
 type Message = {
@@ -14,7 +17,18 @@ export default function Home() {
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isStarted, setIsStarted] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "signup">("signup");
+  const [formData, setFormData] = useState({
+    name: "",
+    phone: "",
+    email: "",
+    password: ""
+  });
+  const [authError, setAuthError] = useState("");
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -69,6 +83,250 @@ export default function Home() {
     }
   };
 
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Simulate sending file message
+      if (!isStarted) setIsStarted(true);
+      const fileName = file.name;
+      const newUserMessage: Message = {
+        id: Date.now(),
+        text: `📎 Sent file: ${fileName}`,
+        sender: "user",
+      };
+      setMessages((prev) => [...prev, newUserMessage]);
+      // Reset input
+      if (e.target) e.target.value = "";
+    }
+  };
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setIsAuthLoading(true);
+
+    try {
+      if (!auth || !db) {
+        setAuthError("Firebase is not connected. Please add valid keys to .env.local and restart the server.");
+        setIsAuthLoading(false);
+        return;
+      }
+
+      if (authMode === "signup") {
+        if (!formData.name || !formData.email || !formData.phone || !formData.password) {
+          setAuthError("Please fill out all fields.");
+          setIsAuthLoading(false);
+          return;
+        }
+        
+        // 1. Create User
+        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+        const user = userCredential.user;
+
+        // 2. Update Profile Name
+        await updateProfile(user, { displayName: formData.name });
+
+        // Note: Phone number is stored safely in state. 
+        // We temporarily disabled saving to Firestore Database because if 
+        // Cloud Firestore isn't created in your console yet, it causes an infinite loading screen.
+
+      } else {
+        if (!formData.email || !formData.password) {
+          setAuthError("Please enter both email and password.");
+          setIsAuthLoading(false);
+          return;
+        }
+
+        // Login User
+        await signInWithEmailAndPassword(auth, formData.email, formData.password);
+      }
+      
+      setIsLoggedIn(true);
+    } catch (err: any) {
+      console.error("Auth Error:", err);
+      let errorMsg = "An error occurred during authentication.";
+      
+      if (err.code === "auth/email-already-in-use") {
+        errorMsg = "This email is already registered. Please log in instead.";
+      } else if (err.code === "auth/invalid-credential" || err.code === "auth/wrong-password" || err.code === "auth/user-not-found") {
+        errorMsg = "Invalid email or password.";
+      } else if (err.code === "auth/weak-password") {
+        errorMsg = "Password should be at least 6 characters.";
+      } else if (err.code === "auth/invalid-email") {
+        errorMsg = "Please enter a valid email address.";
+      } else if (err.message) {
+        errorMsg = err.message.replace("Firebase: ", "").replace(/\(auth.*\)/, "").trim();
+      }
+      
+      setAuthError(errorMsg || "An error occurred during authentication.");
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  if (!isLoggedIn) {
+    return (
+      <main className="auth-container animate-fade-in">
+        <div className="auth-card glass">
+          <div className="auth-header">
+            <h1 className="sparkle-text small-sparkle">NOVA</h1>
+            <p className="auth-subtitle">{authMode === "signup" ? "Create your account" : "Welcome back"}</p>
+          </div>
+
+          <form onSubmit={handleAuth} className="auth-form">
+            {authMode === "signup" && (
+              <>
+                <div className="form-group">
+                  <label>Full Name</label>
+                  <input type="text" name="name" placeholder="John Doe" value={formData.name} onChange={handleInputChange} required />
+                </div>
+                <div className="form-group">
+                  <label>Phone Number</label>
+                  <input type="tel" name="phone" placeholder="+1 234 567 890" value={formData.phone} onChange={handleInputChange} required />
+                </div>
+              </>
+            )}
+            <div className="form-group">
+              <label>Email Address</label>
+              <input type="email" name="email" placeholder="name@example.com" value={formData.email} onChange={handleInputChange} required />
+            </div>
+            <div className="form-group">
+              <label>Password</label>
+              <input type="password" name="password" placeholder="••••••••" value={formData.password} onChange={handleInputChange} required />
+            </div>
+
+            {authError && <div className="auth-error">{authError}</div>}
+
+            <button type="submit" className="btn-primary auth-submit" disabled={isAuthLoading}>
+              {isAuthLoading ? "Processing..." : (authMode === "signup" ? "Sign Up" : "Log In")}
+            </button>
+          </form>
+
+          <p className="auth-footer">
+            {authMode === "signup" ? "Already have an account?" : "Don't have an account?"}
+            <button onClick={() => setAuthMode(authMode === "signup" ? "login" : "signup")} className="auth-toggle">
+              {authMode === "signup" ? "Log In" : "Sign Up"}
+            </button>
+          </p>
+        </div>
+
+        <style jsx>{`
+          .auth-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: var(--bg-primary);
+            padding: 1.5rem;
+          }
+          .auth-card {
+            width: 100%;
+            max-width: 450px;
+            padding: 2.5rem;
+            border-radius: 24px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 1);
+          }
+          .auth-header {
+            text-align: center;
+            margin-bottom: 2rem;
+          }
+          .small-sparkle {
+            font-size: 3rem !important;
+            margin-bottom: 0.5rem;
+          }
+          .auth-subtitle {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+          }
+          .auth-form {
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+          }
+          .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+          }
+          .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 1rem;
+          }
+          label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+          }
+          input {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+            color: white;
+            font-size: 0.9rem;
+            outline: none;
+            transition: all 0.2s ease;
+          }
+          input:focus {
+            border-color: white;
+            background: rgba(255, 255, 255, 0.08);
+          }
+          .auth-submit {
+            padding: 0.9rem;
+            font-weight: 700;
+            font-size: 1rem;
+            border-radius: 12px;
+            margin-top: 1rem;
+            display: flex;
+            justify-content: center;
+          }
+          .auth-submit:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+          }
+          .auth-error {
+            color: #ff4d4d;
+            font-size: 0.8rem;
+            text-align: center;
+            background: rgba(255, 77, 77, 0.1);
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 77, 77, 0.2);
+            margin-top: 4px;
+          }
+          .auth-footer {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+          }
+          .auth-toggle {
+            background: none;
+            border: none;
+            color: white;
+            font-weight: 700;
+            margin-left: 8px;
+            cursor: pointer;
+            text-decoration: underline;
+          }
+        `}</style>
+      </main>
+    );
+  }
+
   if (!isStarted) {
     return (
       <main className="home-container">
@@ -83,11 +341,28 @@ export default function Home() {
         </div>
         
         <form onSubmit={handleSend} style={{ width: "100%", maxWidth: "600px" }}>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            style={{ display: "none" }}
+            accept="image/*,.pdf,.doc,.docx,.txt"
+          />
           <div className="input-wrapper" style={{ position: "relative" }}>
+            <button 
+              type="button" 
+              onClick={handleFileClick}
+              className="btn-add btn-primary" 
+              style={{ position: "absolute", top: "10px", left: "10px", width: "40px", height: "40px", border: "none", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" style={{ width: "20px", height: "20px" }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+            </button>
             <input
               type="text"
               className="chat-input input-gradient"
-              style={{ width: "100%", height: "60px", fontSize: "1.2rem", paddingLeft: "1.5rem", paddingRight: "60px", borderRadius: "50px" }}
+              style={{ width: "100%", height: "60px", fontSize: "1.2rem", paddingLeft: "50px", paddingRight: "60px", borderRadius: "50px" }}
               placeholder="Ask NOVA anything..."
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
@@ -99,6 +374,29 @@ export default function Home() {
             </button>
           </div>
         </form>
+
+        {/* Crafted by signature */}
+        <div style={{
+          marginTop: "2rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          opacity: 0.7,
+          animation: "fadeInUp 1.2s ease forwards"
+        }}>
+          <span style={{ fontSize: "0.7rem", color: "#555", letterSpacing: "0.15em", textTransform: "uppercase" }}>Crafted by</span>
+          <span style={{
+            fontSize: "0.85rem",
+            fontWeight: 700,
+            letterSpacing: "0.2em",
+            background: "linear-gradient(90deg, #c0c0c0, #ffffff, #a0a0a0, #ffffff, #c0c0c0)",
+            backgroundSize: "200% auto",
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+            animation: "shimmer 3s linear infinite",
+            textTransform: "uppercase"
+          }}>RUPALI</span>
+        </div>
       </main>
     );
   }
@@ -144,9 +442,26 @@ export default function Home() {
       <form className="chat-input-area" onSubmit={handleSend}>
         <div className="input-wrapper">
           <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            style={{ display: "none" }}
+            accept="image/*,.pdf,.doc,.docx,.txt"
+          />
+          <button 
+            type="button" 
+            onClick={handleFileClick}
+            className="btn-add-chat btn-primary"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor" style={{ width: "18px", height: "18px" }}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+          </button>
+          <input
             type="text"
             className="chat-input input-gradient"
             placeholder="Ask me anything..."
+            style={{ paddingLeft: "45px" }}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
           />
@@ -163,6 +478,27 @@ export default function Home() {
         </div>
         <div className="footer-text">
           NOVA can make mistakes. Consider verifying critical information.
+        </div>
+        <div style={{
+          textAlign: "center",
+          marginTop: "4px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "6px"
+        }}>
+          <span style={{ fontSize: "0.65rem", color: "#444", letterSpacing: "0.12em", textTransform: "uppercase" }}>Crafted by</span>
+          <span style={{
+            fontSize: "0.7rem",
+            fontWeight: 700,
+            letterSpacing: "0.18em",
+            background: "linear-gradient(90deg, #888, #fff, #888, #fff, #888)",
+            backgroundSize: "200% auto",
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+            animation: "shimmer 3s linear infinite",
+            textTransform: "uppercase"
+          }}>RUPALI</span>
         </div>
       </form>
 
@@ -315,6 +651,31 @@ export default function Home() {
           padding: 0;
           border: none;
         }
+
+        .btn-add {
+          z-index: 3;
+        }
+
+        .btn-add-chat {
+          position: absolute;
+          left: 5px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 36px;
+          height: 36px;
+          border-radius: 50% !important;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 5;
+          cursor: pointer;
+        }
+
+        .btn-add-chat svg {
+          width: 18px;
+          height: 18px;
+        }
+        
         
         .btn-send:disabled {
           opacity: 0.5;
@@ -345,6 +706,11 @@ export default function Home() {
           0% { opacity: 0.2; }
           20% { opacity: 1; }
           100% { opacity: 0.2; }
+        }
+
+        @keyframes shimmer {
+          0% { background-position: 0% center; }
+          100% { background-position: 200% center; }
         }
 
         .footer-text {
